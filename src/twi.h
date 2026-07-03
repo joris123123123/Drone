@@ -7,6 +7,6 @@ void twi_init(void);
 uint8_t twi_start(void);
 void twi_stop(void);
 uint8_t twi_write(uint8_t data);
-uint8_t twi_read(uint8_t ack);
+uint8_t twi_read(uint8_t ack, uint8_t *data);
 
 #endif

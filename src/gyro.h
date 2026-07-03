@@ -2,7 +2,6 @@
 #define GYRO_H
 
 #include <stdint.h>
-#include "twi.h"
 
 typedef struct {
   int16_t ax, ay, az;
