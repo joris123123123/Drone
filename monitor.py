@@ -21,15 +21,15 @@ from typing import Optional
 # ── Regex für das Debug-Format (aus main.c) ───────────────────────────────
 # thr= 1500 rp=  +0 er=    +0 p=  +0 i=     0 d=  +0 out=  +0 m 1000 ...
 DEBUG_RE = re.compile(
-    r"thr=(\d+)\s+"
-    r"rp=([+-]?\d+)\s+"
-    r"er=([+-]?\d+)\s+"
-    r"p=([+-]?\d+)\s+"
-    r"i=([+-]?\d+)\s+"
-    r"d=([+-]?\d+)\s+"
-    r"out=([+-]?\d+)\s+"
-    r"m([+-]?\d+)([+-]?\d+)([+-]?\d+)([+-]?\d+)\s+"
-    r"e=(\d)(\d)(\d)(\d)\s+"
+    r"thr=\s*(\d+)\s+"
+    r"rp=\s*([+-]?\d+)\s+"
+    r"er=\s*([+-]?\d+)\s+"
+    r"p=\s*([+-]?\d+)\s+"
+    r"i=\s*([+-]?\d+)\s+"
+    r"d=\s*([+-]?\d+)\s+"
+    r"out=\s*([+-]?\d+)\s+"
+    r"m\s*([+-]?\d+)\s*([+-]?\d+)\s*([+-]?\d+)\s*([+-]?\d+)\s+"
+    r"e=(\d{3})(\d{3})(\d{3})(\d{3})\s+"
     r"(ARM|DIS)"
 )
 
