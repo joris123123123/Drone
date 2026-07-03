@@ -1,5 +1,3 @@
-// src/gyro.c
-
 #include "gyro.h"
 
 #define MPU_ADDR 0x68
@@ -9,35 +7,44 @@
 #define REG_PWR 0x6B
 #define REG_ACCEL 0x3B
 
-static void write_reg(uint8_t reg, uint8_t val) {
-  twi_start();
-  twi_write(MPU_WR);
-  twi_write(reg);
-  twi_write(val);
+static uint8_t write_reg(uint8_t reg, uint8_t val) {
+  uint8_t ok;
+  ok = twi_start();       if (ok) return 1;
+  ok = twi_write(MPU_WR); if (ok) return 1;
+  ok = twi_write(reg);    if (ok) return 1;
+  ok = twi_write(val);    if (ok) return 1;
   twi_stop();
+  return 0;
 }
 
-static void read_buf(uint8_t reg, uint8_t *buf, uint8_t len) {
-  twi_start();
-  twi_write(MPU_WR);
-  twi_write(reg);
-  twi_start();
-  twi_write(MPU_RD);
+static uint8_t read_buf(uint8_t reg, uint8_t *buf, uint8_t len) {
+  uint8_t ok;
+  ok = twi_start();       if (ok) return 1;
+  ok = twi_write(MPU_WR); if (ok) return 1;
+  ok = twi_write(reg);    if (ok) return 1;
+  ok = twi_start();       if (ok) return 1;
+  ok = twi_write(MPU_RD); if (ok) return 1;
   for (uint8_t i = 0; i < len; i++)
     buf[i] = twi_read(i < len - 1);
   twi_stop();
+  return 0;
 }
 
 uint8_t gyro_init(void) {
-  write_reg(REG_PWR, 0x00);
+  if (write_reg(REG_PWR, 0x00)) return 0;
   uint8_t id = 0;
-  read_buf(0x75, &id, 1);
+  if (read_buf(0x75, &id, 1)) return 0;
   return id == 0x68;
 }
 
 void gyro_read(mpu_data_t *d) {
   uint8_t buf[14];
-  read_buf(REG_ACCEL, buf, 14);
+  if (read_buf(REG_ACCEL, buf, 14)) {
+    d->ax = 0; d->ay = 0; d->az = 0;
+    d->gx = 0; d->gy = 0; d->gz = 0;
+    d->temp = 0;
+    return;
+  }
   d->ax = (int16_t)(buf[0] << 8 | buf[1]);
   d->ay = (int16_t)(buf[2] << 8 | buf[3]);
   d->az = (int16_t)(buf[4] << 8 | buf[5]);

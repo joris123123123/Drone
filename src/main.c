@@ -5,6 +5,7 @@
 #include "twi.h"
 #include <avr/interrupt.h>
 #include <avr/io.h>
+#include <stdio.h>
 
 #define PULSE_MIN 1000
 #define PULSE_MAX 2000
@@ -15,6 +16,23 @@
 
 volatile uint8_t esc_fall[4] = {100, 100, 100, 100};
 volatile uint8_t ctrl_flag = 0;
+
+static int uart_putchar(char c, FILE *stream) {
+  if (c == '\n') uart_putchar('\r', stream);
+  while (!(UCSR0A & (1<<UDRE0)));
+  UDR0 = c;
+  return 0;
+}
+
+static FILE uart_out = FDEV_SETUP_STREAM(uart_putchar, NULL, _FDEV_SETUP_WRITE);
+
+static void serial_init(void) {
+  UCSR0A |= (1<<U2X0);
+  UBRR0H = 0;
+  UBRR0L = 16;
+  UCSR0B = (1<<TXEN0);
+  stdout = &uart_out;
+}
 
 static void esc_init(void) {
   DDRD |= (1 << ESC_BR) | (1 << ESC_FL) | (1 << ESC_FR);
@@ -86,8 +104,19 @@ static uint8_t signal_valid(uint16_t *rc) {
 }
 
 int main(void) {
+  serial_init();
+  DDRB |= (1<<PB5);
+  PORTB |= (1<<PB5);
+  printf("Drone init...\r\n");
   twi_init();
-  gyro_init();
+
+  if (!gyro_init()) {
+    printf("GYRO FAIL\r\n");
+  } else {
+    printf("GYRO OK\r\n");
+  }
+  printf("Calibrating...\r\n");
+
   input_init();
   control_init();
   esc_init();
@@ -95,73 +124,90 @@ int main(void) {
 
   mpu_data_t gyro;
   int32_t sum_gx = 0, sum_gy = 0, sum_gz = 0;
-  for (uint16_t i = 0; i < 256; i++) {
+  for (uint16_t i = 0; i < 128; i++) {
     gyro_read(&gyro);
     sum_gx += gyro.gx;
     sum_gy += gyro.gy;
     sum_gz += gyro.gz;
   }
 
-  int16_t gx_off = (int16_t)(sum_gx / 256);
-  int16_t gy_off = (int16_t)(sum_gy / 256);
-  int16_t gz_off = (int16_t)(sum_gz / 256);
+  int16_t gx_off = (int16_t)(sum_gx / 128);
+  int16_t gy_off = (int16_t)(sum_gy / 128);
+  int16_t gz_off = (int16_t)(sum_gz / 128);
+  printf("Calib done. off=%d %d %d\r\n", gx_off, gy_off, gz_off);
 
-  uint16_t rc[6];
-  int16_t motors[4];
+  uint16_t rc[6] = {1500,1500,1500,1500,1500,1500};
+  int16_t motors[4] = {1000,1000,1000,1000};
   uint8_t armed = 0;
   uint16_t fs_count = 0;
+
 
   sei();
   timer2_init();
 
+  for (volatile uint32_t d = 0; d < 200000; d++);
+  printf("ESC test 1200us...\r\n");
+  esc_fall[0] = 120; esc_fall[1] = 120; esc_fall[2] = 120; esc_fall[3] = 120;
+  for (volatile uint32_t d = 0; d < 2000000; d++);
+  esc_fall[0] = 100; esc_fall[1] = 100; esc_fall[2] = 100; esc_fall[3] = 100;
+  printf("ESC test done\r\n");
+
   while (1) {
-    if (!ctrl_flag)
-      continue;
+    if (!ctrl_flag) continue;
     ctrl_flag = 0;
 
-    rc[CH_ROLL] = input_read(CH_ROLL) / 2;
+    rc[CH_ROLL]  = input_read(CH_ROLL)  / 2;
     rc[CH_PITCH] = input_read(CH_PITCH) / 2;
-    rc[CH_THR] = input_read(CH_THR) / 2;
-    rc[CH_YAW] = input_read(CH_YAW) / 2;
-    rc[CH_MODE] = input_read(CH_MODE) / 2;
-    rc[CH_ARM] = input_read(CH_ARM) / 2;
+    rc[CH_THR]   = input_read(CH_THR)   / 2;
+    rc[CH_YAW]   = input_read(CH_YAW)   / 2;
+    rc[CH_MODE]  = input_read(CH_MODE)  / 2;
+    rc[CH_ARM]   = input_read(CH_ARM)   / 2;
 
-    if (signal_valid(rc)) {
-      fs_count = 0;
-    } else {
+    int16_t gy = 0;
+    if (!signal_valid(rc)) {
       fs_count++;
-      if (fs_count > 50) {
-        armed = 0;
-        motors_idle();
-        continue;
-      }
-      continue;
+      if (fs_count > 50) armed = 0;
+      goto alldone;
     }
+    fs_count = 0;
 
     gyro_read(&gyro);
     int16_t gx = gyro.gx - gx_off;
-    int16_t gy = gyro.gy - gy_off;
+    gy = gyro.gy - gy_off;
     int16_t gz = gyro.gz - gz_off;
+
+    if (rc[CH_ARM] < PULSE_DISARM) {
+      if (armed) armed = 0;
+    }
 
     if (!armed) {
       if (rc[CH_ARM] > PULSE_ARM && rc[CH_THR] < THR_LOW) {
         armed = 1;
         control_reset();
       }
-      if (!armed) {
-        motors_idle();
-        continue;
-      }
-    }
-
-    if (rc[CH_ARM] < PULSE_DISARM) {
-      armed = 0;
       motors_idle();
-      continue;
+    } else {
+      control_loop(rc, gx, gy, gz);
+      control_get_motors(motors);
+      motors_set(motors);
     }
 
-    control_loop(rc, gx, gy, gz);
-    control_get_motors(motors);
-    motors_set(motors);
+alldone:
+    static uint8_t blink = 0;
+    if (++blink >= 125) { blink = 0; PORTB ^= (1<<PB5); }
+
+    static uint8_t dbg = 0;
+    if (++dbg >= 25) {
+      dbg = 0;
+      uint16_t rp = (int16_t)(rc[CH_PITCH] - 1500);
+      printf("thr=%4u rp=%+4d er=%+6d "
+             "p=%+4d i=%+6ld d=%+4d out=%+4d "
+             "m%+4d%+4d%+4d%+4d e=%d%d%d%d %s\r\n",
+             rc[CH_THR], rp, ctrl_pitch_err,
+             ctrl_pitch_p, ctrl_pitch_i, ctrl_pitch_d, ctrl_pitch_out,
+             motors[0], motors[1], motors[2], motors[3],
+              esc_fall[0], esc_fall[1], esc_fall[2], esc_fall[3],
+             armed ? "ARM" : "DIS");
+    }
   }
 }
