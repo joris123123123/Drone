@@ -232,11 +232,11 @@ int main(void) {
             PORTB ^= (1 << PB5);
         }
 
-        static uint8_t dbg = 0;
-        if (++dbg >= 25) {
-            dbg = 0;
-            uint16_t rp = (int16_t)(rc[CH_PITCH] - 1500);
-            printf("thr=%4u rp=%+4d er=%+6d "
+    static uint8_t dbg = 0;
+    if (++dbg >= 25) {
+      dbg = 0;
+      int16_t rp = (int16_t)(rc[CH_PITCH] - 1500) / 5;
+      printf("thr=%4u rp=%+4d er=%+6d "
                    "p=%+4d i=%+6ld d=%+4d out=%+4d "
                    "m%+4d%+4d%+4d%+4d e=%d%d%d%d %s\r\n",
                    rc[CH_THR], rp, ctrl_pitch_err, ctrl_pitch_p, ctrl_pitch_i,

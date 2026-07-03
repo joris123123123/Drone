@@ -2,7 +2,6 @@
 #define CONTROL_H
 
 #include <stdint.h>
-#include "pid.h"
 
 void control_init(void);
 void control_reset(void);
