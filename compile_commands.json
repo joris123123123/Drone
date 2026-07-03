@@ -1,0 +1,34 @@
+[
+  {
+    "file": "src/main.c",
+    "arguments": [
+      "/usr/bin/avr-gcc",
+      "-mmcu=atmega328p",
+      "-DF_CPU=16000000UL",
+      "-Os",
+      "-Wall",
+      "-Wextra",
+      "-o",
+      "littleconsole.elf",
+      "src/main.c"
+    ],
+    "directory": "/home/joris/Projects/Coding/Arduino/LittleConsole",
+    "output": "littleconsole.elf"
+  },
+  {
+    "file": "src/speaker.c",
+    "arguments": [
+      "/usr/bin/avr-gcc",
+      "-mmcu=atmega328p",
+      "-DF_CPU=16000000UL",
+      "-Os",
+      "-Wall",
+      "-Wextra",
+      "-o",
+      "littleconsole.elf",
+      "src/speaker.c"
+    ],
+    "directory": "/home/joris/Projects/Coding/Arduino/LittleConsole",
+    "output": "littleconsole.elf"
+  }
+]
