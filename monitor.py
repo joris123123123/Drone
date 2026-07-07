@@ -9,10 +9,13 @@ Usage:
 """
 
 import argparse
+import fcntl
 import math
 import os
 import re
 import select
+import struct
+import subprocess
 import sys
 import termios
 import time
@@ -65,22 +68,33 @@ def parse_line(line: str, data: DroneData) -> Optional[DroneData]:
 
 # ── Serial (nur stdlib – termios) ─────────────────────────────────────────
 
+def set_baud_termios2(fd: int, baud: int) -> bool:
+    try:
+        TCGETS2 = 0x802C542A
+        TCSETS2 = 0x402C542B
+        BOTHER = 0x10000000
+        buf = bytearray(44)
+        fcntl.ioctl(fd, TCGETS2, buf, True)
+        data = list(struct.unpack_from('<IIIIb19I', buf))
+        data[6] = (data[6] & ~0x000F0000) | BOTHER
+        data[7] = baud
+        data[8] = baud
+        struct.pack_into('<IIIIb19I', buf, 0, *data)
+        fcntl.ioctl(fd, TCSETS2, buf, False)
+        return True
+    except Exception:
+        return False
+
+
 def open_serial(port: str, baud: int) -> int:
     fd = os.open(port, os.O_RDWR | os.O_NOCTTY)
+
+    std_baud = {9600, 19200, 38400, 57600, 115200, 230400}
+    if baud not in std_baud and not set_baud_termios2(fd, baud):
+        subprocess.run(['stty', '-F', port, str(baud)],
+                       capture_output=True)
+
     attrs = termios.tcgetattr(fd)
-
-    baud_map = {
-        9600: termios.B9600,
-        19200: termios.B19200,
-        38400: termios.B38400,
-        57600: termios.B57600,
-        115200: termios.B115200,
-        230400: termios.B230400,
-    }
-    b = baud_map.get(baud, termios.B115200)
-
-    attrs[4] = b
-    attrs[5] = b
     attrs[2] &= ~(termios.CSTOPB | termios.PARENB | termios.CSIZE)
     attrs[2] |= termios.CS8 | termios.CREAD
     attrs[0] &= ~(termios.ICANON | termios.ECHO | termios.ECHOE | termios.ISIG)
@@ -221,7 +235,7 @@ def init_screen():
 def main():
     ap = argparse.ArgumentParser(description="Drone Gyro Monitor (no deps)")
     ap.add_argument("port", nargs="?", default="/dev/ttyUSB0", help="Serial port")
-    ap.add_argument("-b", "--baud", type=int, default=230400, help="Baud rate")
+    ap.add_argument("-b", "--baud", type=int, default=100000, help="Baud rate")
     args = ap.parse_args()
 
     init_screen()
