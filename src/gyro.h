@@ -11,5 +11,8 @@ typedef struct {
 
 uint8_t gyro_init(void);
 void gyro_read(mpu_data_t *d);
+void gyro_read_gyro(mpu_data_t *d);
+void gyro_read_gy(mpu_data_t *d);
+void gyro_read_accel(mpu_data_t *d);
 
 #endif

@@ -7,6 +7,7 @@
 
 #define REG_PWR   0x6B
 #define REG_ACCEL 0x3B
+#define REG_GYRO  0x43
 #define REG_WHOAMI 0x75
 
 #define GYRO_RETRIES 3
@@ -78,4 +79,35 @@ void gyro_read(mpu_data_t *d) {
     d->gx   = (int16_t)(buf[8]  << 8 | buf[9]);
     d->gy   = (int16_t)(buf[10] << 8 | buf[11]);
     d->gz   = (int16_t)(buf[12] << 8 | buf[13]);
+}
+
+void gyro_read_gyro(mpu_data_t *d) {
+    uint8_t buf[6];
+    if (read_buf(REG_GYRO, buf, 6)) {
+        d->gx = 0; d->gy = 0; d->gz = 0;
+        return;
+    }
+    d->gx = (int16_t)(buf[0] << 8 | buf[1]);
+    d->gy = (int16_t)(buf[2] << 8 | buf[3]);
+    d->gz = (int16_t)(buf[4] << 8 | buf[5]);
+}
+
+void gyro_read_gy(mpu_data_t *d) {
+    uint8_t buf[2];
+    if (read_buf(REG_GYRO + 2, buf, 2)) {
+        d->gy = 0;
+        return;
+    }
+    d->gy = (int16_t)(buf[0] << 8 | buf[1]);
+}
+
+void gyro_read_accel(mpu_data_t *d) {
+    uint8_t buf[6];
+    if (read_buf(REG_ACCEL, buf, 6)) {
+        d->ax = 0; d->ay = 0; d->az = 0;
+        return;
+    }
+    d->ax = (int16_t)(buf[0] << 8 | buf[1]);
+    d->ay = (int16_t)(buf[2] << 8 | buf[3]);
+    d->az = (int16_t)(buf[4] << 8 | buf[5]);
 }

@@ -10,7 +10,4 @@
 #define CH_MODE 4
 #define CH_ARM 5
 
-void input_init(void);
-uint16_t input_read(uint8_t ch);
-
 #endif

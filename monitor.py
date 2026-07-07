@@ -9,46 +9,41 @@ Usage:
 """
 
 import argparse
+import math
 import os
 import re
 import select
 import sys
 import termios
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 # ── Regex für das Debug-Format (aus main.c) ───────────────────────────────
-# thr= 1500 rp=  +0 er=    +0 p=  +0 i=     0 d=  +0 out=  +0 m 1000 ...
+# ax=   +42 ay=    +10 az=  -100 gx=   +42 gy=    +10 gz=   -100 ARM
 DEBUG_RE = re.compile(
-    r"thr=\s*(\d+)\s+"
-    r"rp=\s*([+-]?\d+)\s+"
-    r"er=\s*([+-]?\d+)\s+"
-    r"p=\s*([+-]?\d+)\s+"
-    r"i=\s*([+-]?\d+)\s+"
-    r"d=\s*([+-]?\d+)\s+"
-    r"out=\s*([+-]?\d+)\s+"
-    r"m\s*([+-]?\d+)\s*([+-]?\d+)\s*([+-]?\d+)\s*([+-]?\d+)\s+"
-    r"e=(\d{3})(\d{3})(\d{3})(\d{3})\s+"
-    r"(ARM|DIS)"
+    r"ax=\s*([+-]?\d+)\s+"
+    r"ay=\s*([+-]?\d+)\s+"
+    r"az=\s*([+-]?\d+)\s+"
+    r"gx=\s*([+-]?\d+)\s+"
+    r"gy=\s*([+-]?\d+)\s+"
+    r"gz=\s*([+-]?\d+)\s+"
+    r"(ARM|DIS)\s+"
+    r"(\d+)"
 )
 
-# Motor-Reihenfolge aus control_get_motors: 0=BR, 1=FL, 2=FR, 3=BL
-MOTOR_NAMES = ["BR", "FL", "FR", "BL"]
 
 
 @dataclass
 class DroneData:
-    thr: int = 0
-    rp: int = 0
-    er: int = 0
-    p: int = 0
-    i: int = 0
-    d: int = 0
-    out: int = 0
-    motors: list = field(default_factory=lambda: [0, 0, 0, 0])
-    esc_raw: list = field(default_factory=lambda: [0, 0, 0, 0])
+    ax: int = 0
+    ay: int = 0
+    az: int = 0
+    gx: int = 0
+    gy: int = 0
+    gz: int = 0
     armed: bool = False
+    avg_ticks: int = 0
     updated: float = 0.0
 
 
@@ -56,16 +51,14 @@ def parse_line(line: str, data: DroneData) -> Optional[DroneData]:
     m = DEBUG_RE.search(line)
     if not m:
         return None
-    data.thr = int(m.group(1))
-    data.rp = int(m.group(2))
-    data.er = int(m.group(3))
-    data.p = int(m.group(4))
-    data.i = int(m.group(5))
-    data.d = int(m.group(6))
-    data.out = int(m.group(7))
-    data.motors = [int(m.group(8 + i)) for i in range(4)]
-    data.esc_raw = [int(m.group(12 + i)) for i in range(4)]
-    data.armed = m.group(16) == "ARM"
+    data.ax = int(m.group(1))
+    data.ay = int(m.group(2))
+    data.az = int(m.group(3))
+    data.gx = int(m.group(4))
+    data.gy = int(m.group(5))
+    data.gz = int(m.group(6))
+    data.armed = m.group(7) == "ARM"
+    data.avg_ticks = int(m.group(8))
     data.updated = time.time()
     return data
 
@@ -111,13 +104,13 @@ CSI = "\033["
 HIDE = CSI + "?25l"
 SHOW = CSI + "?25h"
 CLS = CSI + "2J" + CSI + "H"
+CLR_END = CSI + "J"
 RESET = CSI + "0m"
 BOLD = CSI + "1m"
 DIM = CSI + "2m"
 GREEN = CSI + "32m"
 RED = CSI + "31m"
 YELLOW = CSI + "33m"
-CYAN = CSI + "36m"
 LGRAY = CSI + "90m"
 
 
@@ -127,63 +120,90 @@ def pos(y: int, x: int = 0):
 
 # ── Dashboard ─────────────────────────────────────────────────────────────
 
-def render(data: DroneData, raw_lines: list[str], port: str, fps: float):
+def render(data: DroneData, port: str, fps: float):
     w = os.get_terminal_size().columns
-    lines = []
 
     dt = time.time() - data.updated if data.updated else 99
     stale = dt > 0.5
 
     armed_sym = f"{GREEN}ARMED{RESET}" if data.armed else f"{RED}DISARMED{RESET}"
-    stale_warn = f"  {YELLOW}⚠ no signal for {dt:.0f}s{RESET}" if stale else ""
+    stale_warn = f"  {YELLOW}\u26a0 no signal for {dt:.0f}s{RESET}" if stale else ""
+
+    lines = []
 
     # ── Header ────────────────────────────────────────────────────────────
+    avg_us = data.avg_ticks // 2
+    loop_hz = 2000000 // data.avg_ticks if data.avg_ticks else 0
     lines.append(
-        f"{BOLD}DRONE MONITOR{RESET}  {LGRAY}{port}{RESET}  "
-        f"|  {armed_sym}  |  {fps:4.0f} Hz  |  thr {data.thr:4d}"
+        f"{BOLD}IMU MONITOR{RESET}  {LGRAY}{port}{RESET}  "
+        f"|  {armed_sym}  |  {fps:4.0f} Hz ({loop_hz:4.0f} loop)  "
+        f"|  {avg_us:5d} us/loop"
         f"{stale_warn}"
     )
     lines.append("")
 
-    # ── PID + Motors 2-Spalten-Layout ────────────────────────────────────
-    col_w = max(20, w // 2 - 2)
+    # ── Convert to physical units ────────────────────────────────────────
+    ACCEL_SENS = 16384.0  # ±2g → LSB/g
+    GYRO_SENS = 131.0     # ±250°/s → LSB/°/s
 
-    # Linke Spalte: Pitch PID
-    lines.append(f"{BOLD}PID Pitch{RESET}               {BOLD}Motors{RESET}")
-    lines.append(f"  {CYAN}P:{RESET} {data.p:+6d}            "
-                 f"  {MOTOR_NAMES[2]}  {data.motors[2]:+5d}")
-    lines.append(f"  {CYAN}I:{RESET} {data.i:+6d}            "
-                 f"  {MOTOR_NAMES[1]}  {data.motors[1]:+5d}")
-    lines.append(f"  {CYAN}D:{RESET} {data.d:+6d}            "
-                 f"  {MOTOR_NAMES[0]}  {data.motors[0]:+5d}")
-    lines.append(f"  {CYAN}Err:{RESET} {data.er:+6d}           "
-                 f"  {MOTOR_NAMES[3]}  {data.motors[3]:+5d}")
-    lines.append(f"  {CYAN}Out:{RESET} {data.out:+6d}")
-    lines.append("")
+    ax_g = data.ax / ACCEL_SENS
+    ay_g = data.ay / ACCEL_SENS
+    az_g = data.az / ACCEL_SENS
 
-    # ── ESC Raw ─────────────────────────────────────────────────────────
-    lines.append(f"{BOLD}ESC Raw{RESET}")
-    for i in range(4):
-        lines.append(f"  {MOTOR_NAMES[i]}  {data.esc_raw[i]:3d}")
-    lines.append("")
+    gx_dps = data.gx / GYRO_SENS
+    gy_dps = data.gy / GYRO_SENS
+    gz_dps = data.gz / GYRO_SENS
 
-    # ── Steuerungshinweise ────────────────────────────────────────────────
-    lines.append(f"{DIM}[q] quit  [c] clear raw buffer{RESET}")
+    # attitude from accelerometer
+    pitch_deg = math.atan2(-ax_g, math.sqrt(ay_g * ay_g + az_g * az_g)) * 180.0 / math.pi
+    roll_deg = math.atan2(ay_g, az_g) * 180.0 / math.pi
 
-    # ── Raw Ausgabe ──────────────────────────────────────────────────────
-    lines.append(f"{DIM}── Raw ──────────────────────────────────────────────{RESET}")
+    # ── Color helpers ────────────────────────────────────────────────────
+    def acc_color(g: float) -> str:
+        return RED if abs(g) >= 1.5 else (YELLOW if abs(g) >= 0.3 else GREEN)
 
+    def gyro_color(dps: float) -> str:
+        return RED if abs(dps) >= 90 else (YELLOW if abs(dps) >= 10 else GREEN)
+
+    # ── Accelerometer ────────────────────────────────────────────────────
+    acc_str = (f"{acc_color(ax_g)}{ax_g:+6.2f}{RESET}g  "
+               f"{acc_color(ay_g)}{ay_g:+6.2f}{RESET}g  "
+               f"{acc_color(az_g)}{az_g:+6.2f}{RESET}g")
+
+    att_str = f"Pitch {GREEN}{pitch_deg:+6.1f}{RESET}\u00b0  Roll {GREEN}{roll_deg:+6.1f}{RESET}\u00b0"
+
+    # ── Gyroscope ────────────────────────────────────────────────────────
+    gyr_str = (f"{gyro_color(gx_dps)}{gx_dps:+7.1f}{RESET}\u00b0/s  "
+               f"{gyro_color(gy_dps)}{gy_dps:+7.1f}{RESET}\u00b0/s  "
+               f"{gyro_color(gz_dps)}{gz_dps:+7.1f}{RESET}\u00b0/s")
+
+    # ── Layout ──────────────────────────────────────────────────────────
+    sep = f"  {BOLD}{LGRAY}{'─' * (w // 2)}{RESET}"
     h, _ = os.get_terminal_size()
-    max_raw = h - len(lines) - 2
-    for rl in raw_lines[-max_raw:]:
-        rl = rl.rstrip("\r\n")
-        lines.append(f"  {rl}")
+    if h >= 12:
+        lines.append("")
+        lines.append(f"  {BOLD}ACCEL{RESET}")
+        lines.append(sep)
+        lines.append(f"    {acc_str}")
+        lines.append(f"    {att_str}")
+        lines.append(sep)
+        lines.append("")
+        lines.append(f"  {BOLD}GYRO{RESET}")
+        lines.append(sep)
+        lines.append(f"    {gyr_str}")
+        lines.append(sep)
+    else:
+        lines.append(f"  {BOLD}A{RESET} {acc_str}")
+        lines.append(f"  {BOLD}G{RESET} {gyr_str}")
+
+    lines.append("")
+    lines.append(f"{DIM}[q] quit{RESET}")
 
     out = "\n".join(lines)
     max_line_w = max((len(l) for l in lines), default=0)
     if max_line_w > w:
         out = "\n".join(l[:w] for l in lines)
-    print(pos(0) + out, end="")
+    print(pos(0) + out + CLR_END, end="")
     sys.stdout.flush()
 
 
@@ -199,14 +219,13 @@ def init_screen():
 # ── Main ──────────────────────────────────────────────────────────────────
 
 def main():
-    ap = argparse.ArgumentParser(description="Drone Serial Monitor (no deps)")
+    ap = argparse.ArgumentParser(description="Drone Gyro Monitor (no deps)")
     ap.add_argument("port", nargs="?", default="/dev/ttyUSB0", help="Serial port")
-    ap.add_argument("-b", "--baud", type=int, default=115200, help="Baud rate")
+    ap.add_argument("-b", "--baud", type=int, default=230400, help="Baud rate")
     args = ap.parse_args()
 
     init_screen()
     data = DroneData()
-    raw_lines: list[str] = []
     fd: Optional[int] = None
     buf = b""
     last_render = 0.0
@@ -228,16 +247,12 @@ def main():
                 ch = sys.stdin.read(1)
                 if ch == "q":
                     break
-                elif ch == "c":
-                    raw_lines.clear()
 
             # ── Verbinden ─────────────────────────────────────────────────
             if fd is None:
                 try:
                     fd = open_serial(args.port, args.baud)
-                    raw_lines.append(f"{GREEN}Connected to {args.port}{RESET}")
                 except OSError as e:
-                    ts = time.strftime("%H:%M:%S")
                     msg = f"Waiting for {args.port}... ({e})"
                     print(pos(0) + f"  {YELLOW}{msg}{RESET}", end="")
                     sys.stdout.flush()
@@ -250,17 +265,14 @@ def main():
                 if r:
                     chunk = os.read(fd, 1024)
                     if not chunk:
-                        raw_lines.append(f"{YELLOW}Port closed{RESET}")
                         disconnect()
                         continue
                     buf += chunk
                     while b"\n" in buf:
                         line_bytes, buf = buf.split(b"\n", 1)
                         line = line_bytes.decode("utf-8", errors="replace").rstrip("\r")
-                        raw_lines.append(line)
                         parse_line(line, data)
             except OSError:
-                raw_lines.append(f"{RED}Connection lost{RESET}")
                 disconnect()
                 continue
 
@@ -276,7 +288,7 @@ def main():
             if now - last_render >= 0.05:
                 last_render = now
                 try:
-                    render(data, raw_lines, args.port, fps)
+                    render(data, args.port, fps)
                 except OSError:
                     break
     except KeyboardInterrupt:

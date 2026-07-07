@@ -5,7 +5,7 @@
 
 void twi_init(void) {
     TWSR = 0;
-    TWBR = 32;
+    TWBR = 12;
 }
 
 uint8_t twi_start(void) {

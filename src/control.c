@@ -5,7 +5,7 @@
 
 #include "pid.h"
 
-#define MOTOR_MIN 1000
+#define MOTOR_MIN 1040
 #define MOTOR_MAX 2000
 
 static pid_axis_t pid_roll, pid_pitch, pid_yaw;
@@ -33,9 +33,9 @@ void control_init(void) {
   pid_roll.kd = 0;
   pid_reset(&pid_roll);
 
-  pid_pitch.kp = 768;
-  pid_pitch.ki = 16;
-  pid_pitch.kd = 256;
+  pid_pitch.kp = 25;
+  pid_pitch.ki = 10;
+  pid_pitch.kd = 15;
   pid_reset(&pid_pitch);
 
   pid_yaw.kp = 0;
@@ -57,14 +57,14 @@ void control_loop(const uint16_t *rc, int16_t gx, int16_t gy, int16_t gz) {
   int16_t rc_pitch = (int16_t)(rc[CH_PITCH] - 1500);
   int16_t rc_yaw = (int16_t)(rc[CH_YAW] - 1500);
 
-  int16_t err_roll = rc_roll * 2 + gx;
-  int16_t err_pitch = rc_pitch * 2 + gy;
-  int16_t err_yaw = rc_yaw * 2 + gz;
+  int16_t err_roll = rc_roll * 4 + gx;
+  int16_t err_pitch = rc_pitch * 4 + gy;
+  int16_t err_yaw = rc_yaw * 4 + gz;
 
-  int16_t p_roll = pid_update(&pid_roll, err_roll, NULL, NULL, NULL);
-  int16_t p_pitch = pid_update(&pid_pitch, err_pitch, &ctrl_pitch_p,
+  int16_t p_roll = pid_update(&pid_roll, err_roll, gx, NULL, NULL, NULL);
+  int16_t p_pitch = pid_update(&pid_pitch, err_pitch, gy, &ctrl_pitch_p,
                                &ctrl_pitch_i, &ctrl_pitch_d);
-  int16_t p_yaw = pid_update(&pid_yaw, err_yaw, NULL, NULL, NULL);
+  int16_t p_yaw = pid_update(&pid_yaw, err_yaw, gz, NULL, NULL, NULL);
 
   ctrl_pitch_err = err_pitch;
   ctrl_pitch_out = p_pitch;
