@@ -10,7 +10,6 @@ Usage:
 
 import argparse
 import fcntl
-import math
 import os
 import re
 import select
@@ -19,15 +18,15 @@ import subprocess
 import sys
 import termios
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Optional
 
 # ── Regex für das Debug-Format (aus main.c) ───────────────────────────────
 # ax=   +42 ay=    +10 az=  -100 gx=   +42 gy=    +10 gz=   -100 ARM
 DEBUG_RE = re.compile(
-    r"ax=\s*([+-]?\d+)\s+"
-    r"ay=\s*([+-]?\d+)\s+"
-    r"az=\s*([+-]?\d+)\s+"
+    r"p=\s*([+-]?\d+)\s+"
+    r"r=\s*([+-]?\d+)\s+"
     r"gx=\s*([+-]?\d+)\s+"
     r"gy=\s*([+-]?\d+)\s+"
     r"gz=\s*([+-]?\d+)\s+"
@@ -39,31 +38,36 @@ DEBUG_RE = re.compile(
 
 @dataclass
 class DroneData:
-    ax: int = 0
-    ay: int = 0
-    az: int = 0
+    pitch: int = 0
+    roll: int = 0
     gx: int = 0
     gy: int = 0
     gz: int = 0
     armed: bool = False
     avg_ticks: int = 0
     updated: float = 0.0
+    log: deque = None
+
+    def __post_init__(self):
+        if self.log is None:
+            self.log = deque(maxlen=8)
 
 
 def parse_line(line: str, data: DroneData) -> Optional[DroneData]:
     m = DEBUG_RE.search(line)
-    if not m:
-        return None
-    data.ax = int(m.group(1))
-    data.ay = int(m.group(2))
-    data.az = int(m.group(3))
-    data.gx = int(m.group(4))
-    data.gy = int(m.group(5))
-    data.gz = int(m.group(6))
-    data.armed = m.group(7) == "ARM"
-    data.avg_ticks = int(m.group(8))
-    data.updated = time.time()
-    return data
+    if m:
+        data.pitch = int(m.group(1))
+        data.roll = int(m.group(2))
+        data.gx = int(m.group(3))
+        data.gy = int(m.group(4))
+        data.gz = int(m.group(5))
+        data.armed = m.group(6) == "ARM"
+        data.avg_ticks = int(m.group(7))
+        data.updated = time.time()
+        return data
+    if line.strip():
+        data.log.append(line.strip())
+    return None
 
 
 # ── Serial (nur stdlib – termios) ─────────────────────────────────────────
@@ -137,11 +141,7 @@ def pos(y: int, x: int = 0):
 def render(data: DroneData, port: str, fps: float):
     w = os.get_terminal_size().columns
 
-    dt = time.time() - data.updated if data.updated else 99
-    stale = dt > 0.5
-
     armed_sym = f"{GREEN}ARMED{RESET}" if data.armed else f"{RED}DISARMED{RESET}"
-    stale_warn = f"  {YELLOW}\u26a0 no signal for {dt:.0f}s{RESET}" if stale else ""
 
     lines = []
 
@@ -152,39 +152,29 @@ def render(data: DroneData, port: str, fps: float):
         f"{BOLD}IMU MONITOR{RESET}  {LGRAY}{port}{RESET}  "
         f"|  {armed_sym}  |  {fps:4.0f} Hz ({loop_hz:4.0f} loop)  "
         f"|  {avg_us:5d} us/loop"
-        f"{stale_warn}"
     )
     lines.append("")
 
     # ── Convert to physical units ────────────────────────────────────────
-    ACCEL_SENS = 16384.0  # ±2g → LSB/g
     GYRO_SENS = 131.0     # ±250°/s → LSB/°/s
-
-    ax_g = data.ax / ACCEL_SENS
-    ay_g = data.ay / ACCEL_SENS
-    az_g = data.az / ACCEL_SENS
 
     gx_dps = data.gx / GYRO_SENS
     gy_dps = data.gy / GYRO_SENS
     gz_dps = data.gz / GYRO_SENS
 
-    # attitude from accelerometer
-    pitch_deg = math.atan2(-ax_g, math.sqrt(ay_g * ay_g + az_g * az_g)) * 180.0 / math.pi
-    roll_deg = math.atan2(ay_g, az_g) * 180.0 / math.pi
+    pitch_deg = data.pitch / 10.0
+    roll_deg = data.roll / 10.0
 
     # ── Color helpers ────────────────────────────────────────────────────
-    def acc_color(g: float) -> str:
-        return RED if abs(g) >= 1.5 else (YELLOW if abs(g) >= 0.3 else GREEN)
+    def angle_color(deg: float) -> str:
+        return RED if abs(deg) >= 30.0 else (YELLOW if abs(deg) >= 10.0 else GREEN)
 
     def gyro_color(dps: float) -> str:
         return RED if abs(dps) >= 90 else (YELLOW if abs(dps) >= 10 else GREEN)
 
-    # ── Accelerometer ────────────────────────────────────────────────────
-    acc_str = (f"{acc_color(ax_g)}{ax_g:+6.2f}{RESET}g  "
-               f"{acc_color(ay_g)}{ay_g:+6.2f}{RESET}g  "
-               f"{acc_color(az_g)}{az_g:+6.2f}{RESET}g")
-
-    att_str = f"Pitch {GREEN}{pitch_deg:+6.1f}{RESET}\u00b0  Roll {GREEN}{roll_deg:+6.1f}{RESET}\u00b0"
+    # ── Attitude ────────────────────────────────────────────────────────
+    att_str = (f"Pitch {angle_color(pitch_deg)}{pitch_deg:+6.1f}{RESET}\u00b0  "
+               f"Roll {angle_color(roll_deg)}{roll_deg:+6.1f}{RESET}\u00b0")
 
     # ── Gyroscope ────────────────────────────────────────────────────────
     gyr_str = (f"{gyro_color(gx_dps)}{gx_dps:+7.1f}{RESET}\u00b0/s  "
@@ -194,11 +184,10 @@ def render(data: DroneData, port: str, fps: float):
     # ── Layout ──────────────────────────────────────────────────────────
     sep = f"  {BOLD}{LGRAY}{'─' * (w // 2)}{RESET}"
     h, _ = os.get_terminal_size()
-    if h >= 12:
+    if h >= 10:
         lines.append("")
-        lines.append(f"  {BOLD}ACCEL{RESET}")
+        lines.append(f"  {BOLD}ATTITUDE{RESET}")
         lines.append(sep)
-        lines.append(f"    {acc_str}")
         lines.append(f"    {att_str}")
         lines.append(sep)
         lines.append("")
@@ -207,10 +196,17 @@ def render(data: DroneData, port: str, fps: float):
         lines.append(f"    {gyr_str}")
         lines.append(sep)
     else:
-        lines.append(f"  {BOLD}A{RESET} {acc_str}")
+        lines.append(f"  {BOLD}A{RESET} {att_str}")
         lines.append(f"  {BOLD}G{RESET} {gyr_str}")
 
     lines.append("")
+    if data.log:
+        lines.append(f"  {BOLD}LOG{RESET}")
+        lines.append(sep)
+        for entry in data.log:
+            lines.append(f"    {LGRAY}{entry}{RESET}")
+        lines.append(sep)
+        lines.append("")
     lines.append(f"{DIM}[q] quit{RESET}")
 
     out = "\n".join(lines)

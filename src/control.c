@@ -33,9 +33,9 @@ void control_init(void) {
   pid_roll.kd = 0;
   pid_reset(&pid_roll);
 
-  pid_pitch.kp = 25;
-  pid_pitch.ki = 10;
-  pid_pitch.kd = 15;
+  pid_pitch.kp = 10;
+  pid_pitch.ki = 1;
+  pid_pitch.kd = 5;
   pid_reset(&pid_pitch);
 
   pid_yaw.kp = 0;
