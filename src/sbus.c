@@ -10,12 +10,28 @@ static volatile uint8_t idx = 0;
 static volatile uint8_t frame_ready = 0;
 static volatile uint8_t failsafe_flag = 0;
 
+// Debug TX is non-blocking: printf() only enqueues bytes, the USART
+// data-register-empty interrupt drains them. This keeps the 100 Hz control
+// loop from stalling for ~6 ms per debug line (100000 baud 8E2 ~= 100 us/byte).
+#define TXBUF_SIZE 256
+static volatile uint8_t txbuf[TXBUF_SIZE];
+static volatile uint8_t tx_head = 0;
+static volatile uint8_t tx_tail = 0;
+
 static int uart_putchar(char c, FILE *stream) {
   if (c == '\n')
     uart_putchar('\r', stream);
-  while (!(UCSR0A & (1 << UDRE0)))
+
+  uint8_t next = (uint8_t)((tx_head + 1) & (TXBUF_SIZE - 1));
+  // Only reachable if we print faster than the line drains; wait for a free
+  // slot so the monitor stream never gets corrupted (never happens at the
+  // current ~20 Hz debug rate).
+  while (next == tx_tail)
     ;
-  UDR0 = c;
+
+  txbuf[tx_head] = (uint8_t)c;
+  tx_head = next;
+  UCSR0B |= (1 << UDRIE0);
   return 0;
 }
 
@@ -45,6 +61,15 @@ ISR(USART_RX_vect) {
       failsafe_flag = (buf[23] >> 3) & 1;
     }
   }
+}
+
+ISR(USART_UDRE_vect) {
+  if (tx_tail == tx_head) {
+    UCSR0B &= ~(1 << UDRIE0); // queue empty, stop interrupting
+    return;
+  }
+  UDR0 = txbuf[tx_tail];
+  tx_tail = (uint8_t)((tx_tail + 1) & (TXBUF_SIZE - 1));
 }
 
 uint8_t sbus_read(uint16_t *channels) {

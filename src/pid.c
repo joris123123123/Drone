@@ -11,14 +11,14 @@ void pid_reset(pid_axis_t *p) {
     p->prev_meas = 0;
 }
 
-int16_t pid_update(pid_axis_t *p, int16_t error, int16_t measurement,
+int16_t pid_update(pid_axis_t *p, int32_t error, int16_t measurement,
                    int16_t *p_out, int32_t *i_out, int16_t *d_out) {
     // Integral accumulates before output
     p->integral += error;
     if (p->integral > I_LIMIT) p->integral = I_LIMIT;
     if (p->integral < -I_LIMIT) p->integral = -I_LIMIT;
 
-    int32_t p_term = (int32_t)error * p->kp;
+    int32_t p_term = error * p->kp;
     int32_t i_term = p->integral * p->ki;
 
     // Derivative on measurement (not error) to avoid derivative kick

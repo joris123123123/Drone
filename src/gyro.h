@@ -3,6 +3,12 @@
 
 #include <stdint.h>
 
+// Sensitivity at the configured full-scale ranges (see gyro_init):
+// gyro  +-250 deg/s  -> 131 LSB per deg/s
+// accel +-2 g        -> 16384 LSB per g
+#define MPU_GYRO_SCALE 131
+#define MPU_ACCEL_SCALE 16384
+
 typedef struct {
   int16_t ax, ay, az;
   int16_t gx, gy, gz;

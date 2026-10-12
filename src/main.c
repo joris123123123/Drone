@@ -11,7 +11,7 @@
 
 #define PULSE_MIN 1000
 #define PULSE_MAX 2000
-#define PULSE_IDLE 0
+#define PULSE_IDLE 1000
 #define PULSE_ARM 1800
 #define PULSE_DISARM 1500
 #define THR_LOW 1100
@@ -130,6 +130,11 @@ int main(void) {
   control_init();
   esc_init();
   timer1_init();
+
+  // Let the gyro's DLPF and bias settle before sampling the offset; sampling
+  // immediately after wake-up leaves a residual rate bias that the one-shot
+  // calibration then bakes in.
+  delay_ms(200);
 
   mpu_data_t gyro;
   int32_t sum_gx = 0, sum_gy = 0, sum_gz = 0;
@@ -263,6 +268,12 @@ int main(void) {
     gz = gyro.gz - gz_off;
     attitude_update(gyro.ax, gyro.ay, gyro.az, gx, gy, gz);
 
+    // Report and control on the bias-corrected rates: the raw gyro drifts with
+    // temperature, so the offset-subtracted value alone is not what the loop
+    // should see (or display). gz has no bias estimate, so it stays raw.
+    gx = attitude_rate_roll();
+    gy = attitude_rate_pitch();
+
     if (rc[CH_ARM] < PULSE_DISARM) {
       if (armed) {
         armed = 0;
@@ -277,6 +288,7 @@ int main(void) {
       }
       motors_idle();
     } else {
+      // gx/gy are the complementary filter's bias-corrected rates.
       control_loop(rc, gx, gy, gz);
       control_get_motors(motors);
       motors_set(motors);
@@ -295,8 +307,12 @@ int main(void) {
       dbg = 0;
       uint16_t avg = (uint16_t)(acc_ticks / 5);
       acc_ticks = 0;
-      printf("p=%+4d r=%+4d gx=%+5d gy=%+5d gz=%+5d %s %u\r\n",
-             attitude_pitch(), attitude_roll(), gx, gy, gz,
+      printf("p=%+4d r=%+4d gx=%+5d gy=%+5d gz=%+5d "
+             "br=%4u fl=%4u fr=%4u bl=%4u "
+             "t=%4u sp=%+4d e=%+6ld o=%+5d %s %u\r\n",
+             attitude_pitch(), attitude_roll(), gx, gy, gz, esc_next[0],
+             esc_next[1], esc_next[2], esc_next[3], rc[CH_THR],
+             (int)(rc[CH_PITCH] - 1500), (long)ctrl_pitch_err, ctrl_pitch_out,
              armed ? "ARM" : "DIS", avg);
     }
   }

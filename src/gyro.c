@@ -5,10 +5,21 @@
 #define MPU_WR (MPU_ADDR << 1)
 #define MPU_RD (MPU_ADDR << 1 | 1)
 
-#define REG_PWR   0x6B
-#define REG_ACCEL 0x3B
-#define REG_GYRO  0x43
-#define REG_WHOAMI 0x75
+#define REG_PWR       0x6B
+#define REG_CONFIG    0x1A
+#define REG_GYRO_CFG  0x1B
+#define REG_ACCEL_CFG 0x1C
+#define REG_ACCEL     0x3B
+#define REG_GYRO      0x43
+#define REG_WHOAMI    0x75
+
+// Digital low-pass filter (CONFIG.DLPF_CFG): 3 => gyro ~42 Hz / accel ~44 Hz
+// bandwidth. Keeps vibration above ~40 Hz from aliasing into the 100 Hz loop.
+#define DLPF_42HZ 0x03
+
+// Gyro full scale +-250 deg/s (FS_SEL=0, MPU_GYRO_SCALE), accel +-2 g (AFS_SEL=0).
+#define GYRO_FS_250  0x00
+#define ACCEL_FS_2G  0x00
 
 #define GYRO_RETRIES 3
 
@@ -49,8 +60,19 @@ static uint8_t read_buf(uint8_t reg, uint8_t *buf, uint8_t len) {
 
 uint8_t gyro_init(void) {
     for (uint8_t retry = 0; retry < GYRO_RETRIES; retry++) {
-        if (write_reg(REG_PWR, 0x00))
+        // Wake the MPU6050 and clock it from the gyro X PLL (more stable than
+        // the internal 8 MHz oscillator).
+        if (write_reg(REG_PWR, 0x01))
             continue;
+        // Enable the digital low-pass filter to reject high-frequency noise.
+        if (write_reg(REG_CONFIG, DLPF_42HZ))
+            continue;
+        // Lock the full-scale ranges so the scale constants are deterministic.
+        if (write_reg(REG_GYRO_CFG, GYRO_FS_250))
+            continue;
+        if (write_reg(REG_ACCEL_CFG, ACCEL_FS_2G))
+            continue;
+
         uint8_t id = 0;
         if (read_buf(REG_WHOAMI, &id, 1))
             continue;

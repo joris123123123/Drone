@@ -23,13 +23,21 @@ from dataclasses import dataclass
 from typing import Optional
 
 # ── Regex für das Debug-Format (aus main.c) ───────────────────────────────
-# ax=   +42 ay=    +10 az=  -100 gx=   +42 gy=    +10 gz=   -100 ARM
+# p=  +0 r=  +0 gx=  +42 gy=  +10 gz= -100 br=1500 fl=1500 fr=1500 bl=1500 DIS 20000
 DEBUG_RE = re.compile(
     r"p=\s*([+-]?\d+)\s+"
     r"r=\s*([+-]?\d+)\s+"
     r"gx=\s*([+-]?\d+)\s+"
     r"gy=\s*([+-]?\d+)\s+"
     r"gz=\s*([+-]?\d+)\s+"
+    r"br=\s*(\d+)\s+"
+    r"fl=\s*(\d+)\s+"
+    r"fr=\s*(\d+)\s+"
+    r"bl=\s*(\d+)\s+"
+    r"t=\s*(\d+)\s+"
+    r"sp=\s*([+-]?\d+)\s+"
+    r"e=\s*([+-]?\d+)\s+"
+    r"o=\s*([+-]?\d+)\s+"
     r"(ARM|DIS)\s+"
     r"(\d+)"
 )
@@ -43,6 +51,14 @@ class DroneData:
     gx: int = 0
     gy: int = 0
     gz: int = 0
+    br: int = 0
+    fl: int = 0
+    fr: int = 0
+    bl: int = 0
+    thr: int = 0
+    sp: int = 0
+    err: int = 0
+    out: int = 0
     armed: bool = False
     avg_ticks: int = 0
     updated: float = 0.0
@@ -61,8 +77,16 @@ def parse_line(line: str, data: DroneData) -> Optional[DroneData]:
         data.gx = int(m.group(3))
         data.gy = int(m.group(4))
         data.gz = int(m.group(5))
-        data.armed = m.group(6) == "ARM"
-        data.avg_ticks = int(m.group(7))
+        data.br = int(m.group(6))
+        data.fl = int(m.group(7))
+        data.fr = int(m.group(8))
+        data.bl = int(m.group(9))
+        data.thr = int(m.group(10))
+        data.sp = int(m.group(11))
+        data.err = int(m.group(12))
+        data.out = int(m.group(13))
+        data.armed = m.group(14) == "ARM"
+        data.avg_ticks = int(m.group(15))
         data.updated = time.time()
         return data
     if line.strip():
@@ -138,7 +162,7 @@ def pos(y: int, x: int = 0):
 
 # ── Dashboard ─────────────────────────────────────────────────────────────
 
-def render(data: DroneData, port: str, fps: float):
+def render(data: DroneData, port: str):
     w = os.get_terminal_size().columns
 
     armed_sym = f"{GREEN}ARMED{RESET}" if data.armed else f"{RED}DISARMED{RESET}"
@@ -150,7 +174,7 @@ def render(data: DroneData, port: str, fps: float):
     loop_hz = 2000000 // data.avg_ticks if data.avg_ticks else 0
     lines.append(
         f"{BOLD}IMU MONITOR{RESET}  {LGRAY}{port}{RESET}  "
-        f"|  {armed_sym}  |  {fps:4.0f} Hz ({loop_hz:4.0f} loop)  "
+        f"|  {armed_sym}  |  {loop_hz:3.0f} Hz  "
         f"|  {avg_us:5d} us/loop"
     )
     lines.append("")
@@ -172,6 +196,11 @@ def render(data: DroneData, port: str, fps: float):
     def gyro_color(dps: float) -> str:
         return RED if abs(dps) >= 90 else (YELLOW if abs(dps) >= 10 else GREEN)
 
+    def motor_color(us: int) -> str:
+        if us <= 0:
+            return DIM
+        return YELLOW if us >= 1900 else GREEN
+
     # ── Attitude ────────────────────────────────────────────────────────
     att_str = (f"Pitch {angle_color(pitch_deg)}{pitch_deg:+6.1f}{RESET}\u00b0  "
                f"Roll {angle_color(roll_deg)}{roll_deg:+6.1f}{RESET}\u00b0")
@@ -180,6 +209,16 @@ def render(data: DroneData, port: str, fps: float):
     gyr_str = (f"{gyro_color(gx_dps)}{gx_dps:+7.1f}{RESET}\u00b0/s  "
                f"{gyro_color(gy_dps)}{gy_dps:+7.1f}{RESET}\u00b0/s  "
                f"{gyro_color(gz_dps)}{gz_dps:+7.1f}{RESET}\u00b0/s")
+
+    # ── Motors (values actually sent to the ESCs) ───────────────────────
+    mot_str = (f"BR {motor_color(data.br)}{data.br:4d}{RESET}  "
+               f"FL {motor_color(data.fl)}{data.fl:4d}{RESET}  "
+               f"FR {motor_color(data.fr)}{data.fr:4d}{RESET}  "
+               f"BL {motor_color(data.bl)}{data.bl:4d}{RESET}")
+
+    # ── Pitch PID internals (diagnostic) ────────────────────────────────
+    pid_str = (f"T {data.thr:4d}  STICK {data.sp:+4d}  "
+               f"ERR {data.err:+6d}  OUT {data.out:+4d}")
 
     # ── Layout ──────────────────────────────────────────────────────────
     sep = f"  {BOLD}{LGRAY}{'─' * (w // 2)}{RESET}"
@@ -194,10 +233,14 @@ def render(data: DroneData, port: str, fps: float):
         lines.append(f"  {BOLD}GYRO{RESET}")
         lines.append(sep)
         lines.append(f"    {gyr_str}")
+        lines.append(f"    {mot_str}")
+        lines.append(f"    {pid_str}")
         lines.append(sep)
     else:
         lines.append(f"  {BOLD}A{RESET} {att_str}")
         lines.append(f"  {BOLD}G{RESET} {gyr_str}")
+        lines.append(f"  {BOLD}M{RESET} {mot_str}")
+        lines.append(f"  {BOLD}D{RESET} {pid_str}")
 
     lines.append("")
     if data.log:
@@ -239,9 +282,6 @@ def main():
     fd: Optional[int] = None
     buf = b""
     last_render = 0.0
-    frame_count = 0
-    fps = 0.0
-    fps_timer = time.time()
 
     def disconnect():
         nonlocal fd, buf
@@ -286,19 +326,12 @@ def main():
                 disconnect()
                 continue
 
-            # ── FPS ───────────────────────────────────────────────────────
-            now = time.time()
-            frame_count += 1
-            if now - fps_timer >= 1.0:
-                fps = frame_count / (now - fps_timer)
-                frame_count = 0
-                fps_timer = now
-
             # ── Rendern (max 20 Hz) ───────────────────────────────────────
+            now = time.time()
             if now - last_render >= 0.05:
                 last_render = now
                 try:
-                    render(data, args.port, fps)
+                    render(data, args.port)
                 except OSError:
                     break
     except KeyboardInterrupt:

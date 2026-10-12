@@ -9,4 +9,8 @@ void attitude_update(int16_t ax, int16_t ay, int16_t az,
 int16_t attitude_pitch(void);
 int16_t attitude_roll(void);
 
+// Bias-corrected body rates (raw gyro LSB) for the rate controller.
+int16_t attitude_rate_pitch(void);
+int16_t attitude_rate_roll(void);
+
 #endif
