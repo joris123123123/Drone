@@ -1,5 +1,6 @@
 .aider*
-drone.hex
 drone.elf
- _pycache__
+drone.hex
+__pycache__
+compile_commands.json
 multiwii-firmware/
